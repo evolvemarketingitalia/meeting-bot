@@ -49,7 +49,14 @@ export interface MeetingFailureContext {
   provider?: string;
 }
 
-type RedisNotificationPayload = RecordingCompletedPayload | MeetingFailedPayload;
+type NotificationPayload = RecordingCompletedPayload | MeetingFailedPayload;
+type WebhookEventType = 'recording' | 'completed' | 'failed';
+
+type WebhookPayload = NotificationPayload & {
+  schemaVersion: 1;
+  eventType: WebhookEventType;
+  notificationId: string;
+};
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -59,32 +66,86 @@ function signPayload(body: string, secret?: string): string | undefined {
   return crypto.createHmac('sha256', secret).update(body).digest('hex');
 }
 
-async function sendWebhook(payload: RecordingCompletedPayload, logger: Logger) {
+export function isRetryableWebhookStatus(status?: number): boolean {
+  return status === undefined
+    || status === 408
+    || status === 425
+    || status === 429
+    || status >= 500;
+}
+
+export function createWebhookPayload(payload: NotificationPayload): WebhookPayload {
+  const eventType: WebhookEventType = payload.status === 'recording'
+    ? 'recording'
+    : payload.status === 'failed'
+      ? 'failed'
+      : 'completed';
+  const stableEntityId = payload.metadata?.botId ?? payload.recordingId;
+  const notificationId = crypto
+    .createHash('sha256')
+    .update(`meeting-bot.v1:${eventType}:${stableEntityId}`)
+    .digest('hex');
+
+  if (eventType === 'completed') {
+    return { ...payload, schemaVersion: 1, eventType, notificationId };
+  }
+
+  const metadata: Record<string, any> = { ...payload.metadata };
+  delete metadata.meetingName;
+  delete metadata.timezone;
+
+  return {
+    ...payload,
+    meetingLink: undefined,
+    metadata,
+    schemaVersion: 1,
+    eventType,
+    notificationId,
+  };
+}
+
+async function sendWebhook(payload: NotificationPayload, logger: Logger, logLabel: string) {
   if (!config.notifyWebhookEnabled) return;
   if (!config.notifyWebhookUrl) {
     logger.warn('Webhook enabled but NOTIFY_WEBHOOK_URL is not set. Skipping.');
     return;
   }
 
-  const body = JSON.stringify(payload);
+  const webhookPayload = createWebhookPayload(payload);
+  const body = JSON.stringify(webhookPayload);
   const signature = signPayload(body, config.notifyWebhookSecret);
 
-  try {
-    await axios.post(config.notifyWebhookUrl, body, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...(signature ? { 'X-Webhook-Signature': signature } : {}),
-      },
-      timeout: 10000,
-    });
-    logger.info('Recording completed webhook delivered.');
-  } catch (err) {
-    logger.error('Failed to deliver recording webhook', err as any);
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await axios.post(config.notifyWebhookUrl, body, {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Webhook-Schema': 'meeting-bot.v1',
+          'X-Webhook-Event': webhookPayload.eventType,
+          'X-Webhook-Event-Id': webhookPayload.notificationId,
+          'Idempotency-Key': webhookPayload.notificationId,
+          ...(signature ? { 'X-Webhook-Signature': signature } : {}),
+        },
+        timeout: 10000,
+      });
+      logger.info(`${logLabel} webhook delivered.`);
+      return;
+    } catch (err) {
+      const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+      logger.error(`Failed to deliver ${logLabel.toLowerCase()} webhook. Attempt ${attempt}/${maxAttempts}.`, {
+        status,
+        code: axios.isAxiosError(err) ? err.code : undefined,
+        message: err instanceof Error ? err.message : 'Unknown webhook error',
+      });
+      if (attempt === maxAttempts || !isRetryableWebhookStatus(status)) return;
+      await sleep(1000 * attempt);
+    }
   }
 }
 
 async function rpushToRedisList(
-  payload: RedisNotificationPayload,
+  payload: NotificationPayload,
   logger: Logger,
   list: string,
   logLabel: string
@@ -134,7 +195,7 @@ async function rpushToRedisList(
 export async function notifyRecordingCompleted(payload: RecordingCompletedPayload, logger: Logger) {
   // Delivery channels are independently controlled by config; run all enabled channels.
   await Promise.allSettled([
-    sendWebhook(payload, logger),
+    sendWebhook(payload, logger, 'Recording completed'),
     rpushToRedisList(payload, logger, config.notifyRedisList, 'Recording completed'),
   ]);
 }
@@ -142,7 +203,11 @@ export async function notifyRecordingCompleted(payload: RecordingCompletedPayloa
 export function createMeetingFailedPayload(context: MeetingFailureContext, error: unknown): MeetingFailedPayload {
   const entityId = context.botId ?? context.eventId ?? context.userId;
   const errorType = getErrorType(error);
-  const message = error instanceof Error ? error.message : String(error ?? 'Unknown error');
+  const rawMessage = error instanceof Error ? error.message : String(error ?? 'Unknown error');
+  const message = rawMessage
+    .replace(/https?:\/\/[^\s"'<>]+/gi, '[redacted-url]')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .slice(0, 2_000);
 
   return {
     recordingId: entityId,
@@ -170,6 +235,28 @@ export function createMeetingFailedPayload(context: MeetingFailureContext, error
   };
 }
 
+export function createMeetingJoinedPayload(context: MeetingFailureContext): RecordingCompletedPayload {
+  return {
+    recordingId: context.botId ?? context.eventId ?? context.userId,
+    status: 'recording',
+    timestamp: new Date().toISOString(),
+    metadata: {
+      userId: context.userId,
+      teamId: context.teamId,
+      botId: context.botId,
+      eventId: context.eventId,
+      provider: context.provider,
+    },
+  };
+}
+
+export async function notifyMeetingJoined(payload: RecordingCompletedPayload, logger: Logger) {
+  await sendWebhook(payload, logger, 'Meeting joined');
+}
+
 export async function notifyMeetingFailed(payload: MeetingFailedPayload, logger: Logger) {
-  await rpushToRedisList(payload, logger, config.notifyRedisFailureList, 'Meeting failed');
+  await Promise.allSettled([
+    sendWebhook(payload, logger, 'Meeting failed'),
+    rpushToRedisList(payload, logger, config.notifyRedisFailureList, 'Meeting failed'),
+  ]);
 }

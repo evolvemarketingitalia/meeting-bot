@@ -125,9 +125,9 @@ Content-Type: application/json
 }
 ```
 
-### Recording Completion Notifications (Optional)
+### Recording Lifecycle Notifications (Optional)
 
-You can configure Meeting Bot to notify external systems when a recording has finished and is ready. Two channels are supported:
+You can configure Meeting Bot to notify external systems when a bot joins, fails, or finishes a recording. Two channels are supported:
 
 - Webhook HTTP POST
 - Redis list push (RPUSH) to a configurable DB and list
@@ -182,13 +182,17 @@ Notes:
 - The storage URL is provided as blobUrl to be storage-provider agnostic (works for S3, Azure Blob, etc.). It may be omitted if not available.
 - If available from internal APIs (screenapp uploader), a direct file URL is used. For S3-compatible uploads, the URL is constructed based on S3 configuration. For Azure Blob Storage, notification URLs are SAS URLs; unsigned Azure public blob URLs are not pushed to Redis as a fallback.
 - If a webhook secret is configured, the request body is signed with HMAC-SHA256 and sent in the X-Webhook-Signature header.
+- Webhook bodies include `schemaVersion`, `eventType`, and a deterministic `notificationId`. The same identifier is sent as `X-Webhook-Event-Id` and `Idempotency-Key` so consumers can safely ignore retries.
+- `recording` and `failed` webhook events omit the meeting URL, meeting name, and timezone. Completion payloads retain the existing storage contract.
 - The metadata.storage section includes provider-specific path details. For S3-compatible uploads: bucket and key are provided. For the Screenapp uploader, you may see `{ provider: "screenapp", fileId, url, defaultProfile }`.
 
 #### Behavior
 
-- Notifications are triggered only after the recording upload/processing has successfully completed.
+- A `recording` webhook is sent only after the provider-specific bot confirms that it joined the meeting.
+- A `failed` webhook is sent after the bot exhausts its join/recording retries.
+- A `completed` webhook keeps the existing behavior and is sent only after upload/processing succeeds.
 - Failed meeting jobs are pushed to NOTIFY_REDIS_FAILURE_LIST after all join/recording retries are exhausted, or after a non-retryable upload failure.
-- Failure notifications are Redis-only and use the same NOTIFY_REDIS_ENABLED, NOTIFY_REDIS_URI, and NOTIFY_REDIS_DB settings.
+- Failure notifications continue to use the same NOTIFY_REDIS_ENABLED, NOTIFY_REDIS_URI, and NOTIFY_REDIS_DB settings for Redis delivery.
 - If both channels are enabled, both will receive the payload.
 - Failures to notify are logged but do not interrupt the main recording flow.
 

@@ -97,7 +97,10 @@ const joinGoogleMeet = async (req: Request, res: Response) => {
         teamId,
         eventId,
         botId,
-        status: 'processing'
+        status: 'processing',
+        capabilities: {
+          lifecycleWebhook: 'meeting-bot.v1'
+        }
       }
     });
 

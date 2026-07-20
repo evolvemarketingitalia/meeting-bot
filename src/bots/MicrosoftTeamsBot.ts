@@ -18,6 +18,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { createMeetingJoinedPayload, notifyMeetingJoined } from '../services/notificationService';
 
 const execAsync = promisify(exec);
 
@@ -95,7 +96,7 @@ export class MicrosoftTeamsBot extends MeetBotBase {
     }
   }
 
-  private async joinMeeting({ url, name, teamId, userId, eventId, botId, pushState, uploader }: JoinParams & { pushState(state: BotStatus): void }): Promise<void> {
+  private async joinMeeting({ url, name, teamId, timezone, userId, eventId, botId, pushState, uploader }: JoinParams & { pushState(state: BotStatus): void }): Promise<void> {
     const joinButtonSelectors = [
       'button[aria-label="Join meeting from this browser"]',
       'button[aria-label="Continue on this browser"]',
@@ -314,6 +315,16 @@ export class MicrosoftTeamsBot extends MeetBotBase {
     }
 
     pushState('joined');
+    void notifyMeetingJoined(createMeetingJoinedPayload({
+      url,
+      name,
+      teamId,
+      timezone,
+      userId,
+      eventId,
+      botId,
+      provider: 'microsoft',
+    }), this._logger);
 
     const dismissDeviceChecksAndNotifications = async () => {
       const closeSelectors = ['button[aria-label=Close]:visible', 'button[title="Close"]:visible'];
