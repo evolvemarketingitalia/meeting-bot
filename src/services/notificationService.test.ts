@@ -4,6 +4,7 @@ import {
   createMeetingFailedPayload,
   createMeetingJoinedPayload,
   createWebhookPayload,
+  getMeetingBotLifecycleCapabilities,
   isRetryableWebhookStatus,
 } from './notificationService';
 
@@ -65,4 +66,14 @@ test('webhook retry policy rejects permanent client errors', () => {
   assert.equal(isRetryableWebhookStatus(400), false);
   assert.equal(isRetryableWebhookStatus(404), false);
   assert.equal(isRetryableWebhookStatus(401), false);
+});
+
+test('lifecycle capability is announced only with signed webhook delivery', () => {
+  assert.deepEqual(
+    getMeetingBotLifecycleCapabilities(true, 'https://worker.example/webhook', 'secret'),
+    { lifecycleWebhook: 'meeting-bot.v1' },
+  );
+  assert.equal(getMeetingBotLifecycleCapabilities(false, 'https://worker.example/webhook', 'secret'), undefined);
+  assert.equal(getMeetingBotLifecycleCapabilities(true, undefined, 'secret'), undefined);
+  assert.equal(getMeetingBotLifecycleCapabilities(true, 'https://worker.example/webhook', undefined), undefined);
 });

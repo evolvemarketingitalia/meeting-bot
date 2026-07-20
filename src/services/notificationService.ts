@@ -74,6 +74,16 @@ export function isRetryableWebhookStatus(status?: number): boolean {
     || status >= 500;
 }
 
+export function getMeetingBotLifecycleCapabilities(
+  enabled = config.notifyWebhookEnabled,
+  url = config.notifyWebhookUrl,
+  secret = config.notifyWebhookSecret,
+): { lifecycleWebhook: 'meeting-bot.v1' } | undefined {
+  return enabled && Boolean(url) && Boolean(secret)
+    ? { lifecycleWebhook: 'meeting-bot.v1' }
+    : undefined;
+}
+
 export function createWebhookPayload(payload: NotificationPayload): WebhookPayload {
   const eventType: WebhookEventType = payload.status === 'recording'
     ? 'recording'

@@ -8,6 +8,7 @@ import { getRecordingNamePrefix } from '../util/recordingName';
 import { encodeFileNameSafebase64 } from '../util/strings';
 import { MeetingJoinParams, notifyMeetingJoinFailure } from './common';
 import { globalJobStore } from '../lib/globalJobStore';
+import { getMeetingBotLifecycleCapabilities } from '../services/notificationService';
 
 const router = express.Router();
 
@@ -98,9 +99,7 @@ const joinZoom = async (req: Request, res: Response) => {
         eventId,
         botId,
         status: 'processing',
-        capabilities: {
-          lifecycleWebhook: 'meeting-bot.v1'
-        }
+        capabilities: getMeetingBotLifecycleCapabilities()
       }
     });
 
