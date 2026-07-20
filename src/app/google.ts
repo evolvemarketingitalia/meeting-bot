@@ -8,6 +8,7 @@ import { getRecordingNamePrefix } from '../util/recordingName';
 import { encodeFileNameSafebase64 } from '../util/strings';
 import { MeetingJoinParams, notifyMeetingJoinFailure } from './common';
 import { globalJobStore } from '../lib/globalJobStore';
+import { getMeetingBotLifecycleCapabilities } from '../services/notificationService';
 
 const router = express.Router();
 
@@ -97,7 +98,8 @@ const joinGoogleMeet = async (req: Request, res: Response) => {
         teamId,
         eventId,
         botId,
-        status: 'processing'
+        status: 'processing',
+        capabilities: getMeetingBotLifecycleCapabilities()
       }
     });
 

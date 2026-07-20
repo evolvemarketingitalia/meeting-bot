@@ -15,6 +15,7 @@ import createBrowserContext, { isExternalBrowserContext } from '../lib/chromium'
 import { GOOGLE_LOBBY_MODE_HOST_TEXT, GOOGLE_REQUEST_DENIED, GOOGLE_REQUEST_TIMEOUT } from '../constants';
 import { getRecordingMimeTypesForExtension } from '../lib/recording';
 import { getGoogleMeetDisplayName } from '../util/googleMeetDisplayName';
+import { createMeetingJoinedPayload, notifyMeetingJoined } from '../services/notificationService';
 
 export class GoogleMeetBot extends MeetBotBase {
   private _logger: Logger;
@@ -86,7 +87,7 @@ export class GoogleMeetBot extends MeetBotBase {
     }
   }
 
-  private async joinMeeting({ url, name, teamId, userId, eventId, botId, pushState, uploader }: JoinParams & { pushState(state: BotStatus): void }): Promise<void> {
+  private async joinMeeting({ url, name, teamId, timezone, userId, eventId, botId, pushState, uploader }: JoinParams & { pushState(state: BotStatus): void }): Promise<void> {
     this._logger.info('Launching browser...');
 
     this.page = await createBrowserContext(url, this._correlationId, 'google');
@@ -540,6 +541,16 @@ export class GoogleMeetBot extends MeetBotBase {
     }
 
     pushState('joined');
+    void notifyMeetingJoined(createMeetingJoinedPayload({
+      url,
+      name,
+      teamId,
+      timezone,
+      userId,
+      eventId,
+      botId,
+      provider: 'google',
+    }), this._logger);
 
     try {
       this._logger.info('Waiting for the "Got it" button...');

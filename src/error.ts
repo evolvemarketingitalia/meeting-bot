@@ -39,6 +39,16 @@ export class RecordingUploadFailedError extends KnownError {
   }
 }
 
+export class ZoomGuestJoinBlockedError extends KnownError {
+  constructor(reason: 'automated-bot-policy' | 'signin-required') {
+    const message = reason === 'automated-bot-policy'
+      ? 'ZOOM_AUTOMATED_BOTS_NOT_ALLOWED: Zoom does not allow automated bots to join this meeting.'
+      : 'ZOOM_SIGN_IN_REQUIRED: Zoom requires sign-in before joining this meeting.';
+    super(message, false, 0);
+    this.name = 'ZoomGuestJoinBlockedError';
+  }
+}
+
 export class UnsupportedMeetingError extends KnownError {
   public googleMeetPageStatus: 'SIGN_IN_PAGE' | 'GOOGLE_MEET_PAGE' | 'UNSUPPORTED_PAGE' | null;
 
