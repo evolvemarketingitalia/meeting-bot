@@ -2,7 +2,7 @@ import { Frame, Page } from 'playwright';
 import { JoinParams, AbstractMeetBot } from './AbstractMeetBot';
 import { BotStatus, WaitPromise } from '../types';
 import config from '../config';
-import { RecordingUploadFailedError, WaitingAtLobbyRetryError } from '../error';
+import { RecordingUploadFailedError, WaitingAtLobbyRetryError, ZoomGuestJoinBlockedError } from '../error';
 import { v4 } from 'uuid';
 import { patchBotStatus } from '../services/botService';
 import { RecordingTask } from '../tasks/RecordingTask';
@@ -15,7 +15,9 @@ import { handleWaitingAtLobbyError } from './MeetBotBase';
 import { ZOOM_REQUEST_DENIED } from '../constants';
 import {
   clickZoomJoinWithOptionalMediaPromptRetry,
+  detectZoomPostJoinBlock,
   dismissZoomOptionalMediaPrompt,
+  pollZoomLobbySerially,
 } from './zoomPrejoinModal';
 import { createMeetingJoinedPayload, notifyMeetingJoined } from '../services/notificationService';
 
@@ -318,66 +320,76 @@ export class ZoomBot extends BotBase {
     try {
       const wanderingTime = config.joinWaitTime * 60 * 1000; // Give some time to be let in
 
-      let waitTimeout: NodeJS.Timeout;
-      let waitInterval: NodeJS.Timeout;
-      const waitAtLobbyPromise = new Promise<boolean>((resolveMe) => {
-        waitTimeout = setTimeout(() => {
-          clearInterval(waitInterval);
-          resolveMe(false);
-        }, wanderingTime);
-
-        waitInterval = setInterval(async () => {
-          try {
-            const footerInfo = await iframe.locator('#wc-footer');
-            await footerInfo.waitFor({ state: 'attached' });
-            const footerText = await footerInfo?.innerText();
-
-            const tokens1 = footerText.split('\n');
-            const tokens2 = footerText.split(' ');
-            const tokens = tokens1.length > tokens2.length ? tokens1 : tokens2;
-  
-            const filtered: string[] = [];
-            for (const tok of tokens) {
-              if (!tok) continue;
-              if (!Number.isNaN(Number(tok.trim())))
-                filtered.push(tok);
-              else if (tok.trim().toLowerCase() === 'participants') {
-                filtered.push(tok.trim().toLowerCase());
-                break;
-              }
-            }
-            const joinedText = filtered.join('');
-
-            if (joinedText === 'participants') 
-              return;
-
-            const isValid = joinedText.match(/\d+(.*)participants/i);
-            if (!isValid) {
-              return;
-            }
-
-            const num = joinedText.match(/\d+/);
-            this._logger.info('Final Number of participants while waiting...', num);
-            if (num && Number(num[0]) === 0)
-              this._logger.info('Waiting on host...');
-            else {
-              clearInterval(waitInterval);
-              clearTimeout(waitTimeout);
-              resolveMe(true);
-            }
-          } catch(e) {
-            // Do nothing
+      type ZoomLobbyOutcome =
+        | { kind: 'joined' }
+        | { kind: 'timeout' }
+        | { kind: 'blocked'; reason: 'automated-bot-policy' | 'signin-required' };
+      const lobbyResult = await pollZoomLobbySerially<Exclude<ZoomLobbyOutcome, { kind: 'timeout' }>>(
+        async () => {
+          const containers: (Frame | Page)[] = iframe === this.page
+            ? [this.page]
+            : [iframe, this.page];
+          const postJoinBlock = await detectZoomPostJoinBlock(
+            containers.map(container => ({
+              url: () => container.url(),
+              bodyText: () => container.locator('body').innerText({ timeout: 1500 }),
+            }))
+          );
+          if (postJoinBlock) {
+            this._logger.error('Zoom guest join blocked', { reason: postJoinBlock });
+            return { kind: 'blocked', reason: postJoinBlock };
           }
-        }, 2000);
-      });
 
-      const joined = await waitAtLobbyPromise;
-      if (!joined) {
+          const footerInfo = await iframe.locator('#wc-footer');
+          await footerInfo.waitFor({ state: 'attached', timeout: 1500 });
+          const footerText = await footerInfo.innerText({ timeout: 1500 });
+
+          const tokens1 = footerText.split('\n');
+          const tokens2 = footerText.split(' ');
+          const tokens = tokens1.length > tokens2.length ? tokens1 : tokens2;
+  
+          const filtered: string[] = [];
+          for (const tok of tokens) {
+            if (!tok) continue;
+            if (!Number.isNaN(Number(tok.trim())))
+              filtered.push(tok);
+            else if (tok.trim().toLowerCase() === 'participants') {
+              filtered.push(tok.trim().toLowerCase());
+              break;
+            }
+          }
+          const joinedText = filtered.join('');
+
+          if (joinedText === 'participants')
+            return;
+
+          const isValid = joinedText.match(/\d+(.*)participants/i);
+          if (!isValid) {
+            return;
+          }
+
+          const num = joinedText.match(/\d+/);
+          this._logger.info('Final Number of participants while waiting...', num);
+          if (num && Number(num[0]) === 0)
+            this._logger.info('Waiting on host...');
+          else {
+            return { kind: 'joined' };
+          }
+          return undefined;
+        },
+        wanderingTime,
+        2000,
+      );
+      const lobbyOutcome: ZoomLobbyOutcome = lobbyResult ?? { kind: 'timeout' };
+      if (lobbyOutcome.kind === 'blocked') {
+        throw new ZoomGuestJoinBlockedError(lobbyOutcome.reason);
+      }
+      if (lobbyOutcome.kind !== 'joined') {
         const bodyText = await this.page.evaluate(() => document.body.innerText);
 
         const userDenied = (bodyText || '')?.includes(ZOOM_REQUEST_DENIED);
 
-        this._logger.error('Cant finish wait at the lobby check', { userDenied, waitingAtLobbySuccess: joined, bodyText });
+        this._logger.error('Cant finish wait at the lobby check', { userDenied, waitingAtLobbySuccess: false, bodyText });
 
         // Don't retry lobby errors - if user doesn't admit bot, retrying won't help
         throw new WaitingAtLobbyRetryError('Zoom bot could not enter the meeting...', bodyText ?? '', false, 0);
