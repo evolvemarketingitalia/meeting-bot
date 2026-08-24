@@ -29,18 +29,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Login to registry for all pushes
+      # Login to registry for branch pushes and explicit release dispatches.
       - name: Log in to Container Registry
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Get version/tag only on main push
+      # Get version/tag for releases from main (push or explicit dispatch).
       - name: Get version from package.json
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         id: pkg
         run: |
           VERSION=$(jq -r .version package.json)
@@ -51,7 +51,7 @@ jobs:
 
       # Fail if tag exists already (only on main push)
       - name: Fail if tag exists
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         id: check_tag
         run: |
           if git ls-remote --tags origin "refs/tags/${{ env.TAG }}" | grep .; then
@@ -61,7 +61,7 @@ jobs:
 
       # Create and push git tag if it doesn't exist (only on main push)
       - name: Create and push tag
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -75,7 +75,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && format('type=raw,value={0}', env.TAG) || '' }}
+            ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && format('type=raw,value={0}', env.TAG) || '' }}
             type=ref,event=branch
             type=sha,prefix=sha-
             type=raw,value=latest,enable={{is_default_branch}}
@@ -86,7 +86,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.CHROME_CDP_IMAGE_NAME }}
           tags: |
-            ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && format('type=raw,value={0}', env.TAG) || '' }}
+            ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && format('type=raw,value={0}', env.TAG) || '' }}
             type=ref,event=branch
             type=sha,prefix=sha-
             type=raw,value=latest,enable={{is_default_branch}}
@@ -100,7 +100,7 @@ jobs:
           # Multi-arch on push; amd64-only on PRs to keep the build check fast
           # (arm64 builds under QEMU emulation are very slow for this image).
           platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
-          push: ${{ github.event_name == 'push' }}
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
@@ -112,7 +112,7 @@ jobs:
           context: .
           file: ./Dockerfile.chrome-cdp
           platforms: linux/amd64
-          push: ${{ github.event_name == 'push' }}
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.chrome-cdp-meta.outputs.tags }}
           labels: ${{ steps.chrome-cdp-meta.outputs.labels }}
           cache-from: type=gha,scope=chrome-cdp
