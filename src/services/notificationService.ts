@@ -1,10 +1,10 @@
 import axios from 'axios';
-import crypto from 'crypto';
 import { Logger } from 'winston';
 import config from '../config';
 import { createClient, RedisClientType } from 'redis';
 import { KnownError } from '../error';
 import { getErrorType } from '../util/logger';
+import { createWebhookAuthHeaders } from '../security/webhookSignature';
 
 export interface RecordingCompletedPayload {
   recordingId: string;
@@ -54,11 +54,6 @@ type RedisNotificationPayload = RecordingCompletedPayload | MeetingFailedPayload
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
-function signPayload(body: string, secret?: string): string | undefined {
-  if (!secret) return undefined;
-  return crypto.createHmac('sha256', secret).update(body).digest('hex');
-}
-
 async function sendWebhook(payload: RecordingCompletedPayload, logger: Logger) {
   if (!config.notifyWebhookEnabled) return;
   if (!config.notifyWebhookUrl) {
@@ -67,13 +62,15 @@ async function sendWebhook(payload: RecordingCompletedPayload, logger: Logger) {
   }
 
   const body = JSON.stringify(payload);
-  const signature = signPayload(body, config.notifyWebhookSecret);
+  const authHeaders = config.notifyWebhookSecret
+    ? createWebhookAuthHeaders(body, config.notifyWebhookSecret)
+    : {};
 
   try {
     await axios.post(config.notifyWebhookUrl, body, {
       headers: {
         'Content-Type': 'application/json',
-        ...(signature ? { 'X-Webhook-Signature': signature } : {}),
+        ...authHeaders,
       },
       timeout: 10000,
     });

@@ -138,7 +138,7 @@ Webhook notifications are disabled by default. Redis completion notifications ar
 
 - NOTIFY_WEBHOOK_ENABLED: Enable webhook delivery (default: false)
 - NOTIFY_WEBHOOK_URL: Webhook endpoint URL
-- NOTIFY_WEBHOOK_SECRET: Optional secret to HMAC-SHA256 sign payloads. Signature header: X-Webhook-Signature
+- NOTIFY_WEBHOOK_SECRET: Optional secret to HMAC-SHA256 sign payloads. During the v2 rollout the sender includes the legacy `X-Webhook-Signature` plus replay-resistant `X-Webhook-Signature-V2`, `X-Webhook-Timestamp`, and `X-Webhook-Nonce` headers.
 
 - NOTIFY_REDIS_ENABLED: Enable Redis notifications. Completion notifications are also enabled automatically when REDIS_CONSUMER_ENABLED=true so Redis jobs produce result-list entries.
 - NOTIFY_REDIS_URI: Optional Redis URI for notifications; if not set, falls back to REDIS_HOST/REDIS_PORT/etc via redisUri
@@ -181,7 +181,7 @@ An example JSON payload sent via webhook and pushed to the Redis list:
 Notes:
 - The storage URL is provided as blobUrl to be storage-provider agnostic (works for S3, Azure Blob, etc.). It may be omitted if not available.
 - If available from internal APIs (screenapp uploader), a direct file URL is used. For S3-compatible uploads, the URL is constructed based on S3 configuration. For Azure Blob Storage, notification URLs are SAS URLs; unsigned Azure public blob URLs are not pushed to Redis as a fallback.
-- If a webhook secret is configured, the request body is signed with HMAC-SHA256 and sent in the X-Webhook-Signature header.
+- If a webhook secret is configured, the request body is signed with HMAC-SHA256. The v2 signature covers `timestamp.nonce.rawBody`; receivers must enforce a short timestamp window and atomically reject reused nonces.
 - The metadata.storage section includes provider-specific path details. For S3-compatible uploads: bucket and key are provided. For the Screenapp uploader, you may see `{ provider: "screenapp", fileId, url, defaultProfile }`.
 
 #### Behavior
